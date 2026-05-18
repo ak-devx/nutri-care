@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  CalendarDays,
   ClipboardList,
   Copy,
   Download,
   FileText,
   Instagram,
+  Loader2,
   LogOut,
   Pencil,
   Plus,
@@ -75,6 +77,21 @@ const inputClassName =
 
 const labelClassName = 'mb-2 block text-sm font-semibold text-slate-700';
 
+const primaryButtonClassName =
+  'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-leaf-600 px-4 text-sm font-semibold text-white transition hover:bg-leaf-700 disabled:cursor-not-allowed disabled:bg-slate-300';
+
+const darkButtonClassName =
+  'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300';
+
+const secondaryButtonClassName =
+  'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700 disabled:cursor-not-allowed disabled:border-slate-100 disabled:text-slate-300';
+
+const dangerButtonClassName =
+  'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-100 disabled:text-slate-300';
+
+const panelClassName =
+  'rounded-lg border border-slate-200 bg-white p-6 shadow-sm';
+
 const statusLabelMap = Object.fromEntries(
   ADMIN_CLIENT_STATUSES.map((status) => [status.id, status.label]),
 ) as Record<AdminClientStatus, string>;
@@ -82,6 +99,22 @@ const statusLabelMap = Object.fromEntries(
 const paymentLabelMap = Object.fromEntries(
   ADMIN_PAYMENT_STATUSES.map((status) => [status.id, status.label]),
 ) as Record<AdminPaymentStatus, string>;
+
+const statusToneMap: Record<AdminClientStatus, string> = {
+  new: 'bg-slate-100 text-slate-700',
+  intakeReceived: 'bg-sky-50 text-sky-700',
+  paymentPending: 'bg-amber-50 text-amber-700',
+  planPending: 'bg-violet-50 text-violet-700',
+  planSent: 'bg-leaf-50 text-leaf-700',
+  followUpDue: 'bg-orange-50 text-orange-700',
+  completed: 'bg-slate-900 text-white',
+};
+
+const paymentToneMap: Record<AdminPaymentStatus, string> = {
+  unpaid: 'bg-red-50 text-red-700',
+  partial: 'bg-amber-50 text-amber-700',
+  paid: 'bg-leaf-50 text-leaf-700',
+};
 
 const formatDate = (value: string): string => {
   if (!value) {
@@ -96,6 +129,50 @@ const formatDate = (value: string): string => {
         month: 'short',
         year: 'numeric',
       });
+};
+
+const formatRelativeDate = (value: string): string => {
+  if (!value) {
+    return 'No follow-up set';
+  }
+
+  const target = new Date(value);
+  if (Number.isNaN(target.getTime())) {
+    return value;
+  }
+
+  const today = new Date();
+  const startOfToday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const startOfTarget = new Date(
+    target.getFullYear(),
+    target.getMonth(),
+    target.getDate(),
+  );
+  const dayDelta = Math.round(
+    (startOfTarget.getTime() - startOfToday.getTime()) / 86_400_000,
+  );
+
+  if (dayDelta === 0) {
+    return 'Follow-up today';
+  }
+
+  if (dayDelta === 1) {
+    return 'Follow-up tomorrow';
+  }
+
+  if (dayDelta === -1) {
+    return 'Follow-up yesterday';
+  }
+
+  if (dayDelta > 1) {
+    return `Follow-up in ${dayDelta} days`;
+  }
+
+  return `Follow-up ${Math.abs(dayDelta)} days overdue`;
 };
 
 const createFreshClient = (): AdminClient => createAdminClient();
@@ -119,6 +196,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
   const [statusFilter, setStatusFilter] = useState<'all' | AdminClientStatus>(
     'all',
   );
+  const [paymentFilter, setPaymentFilter] = useState<'all' | AdminPaymentStatus>(
+    'all',
+  );
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSavingClient, setIsSavingClient] = useState(false);
+  const [startingPlanClientId, setStartingPlanClientId] = useState('');
   const [notice, setNotice] = useState<AdminNotice>(null);
 
   const routeClientId = useMemo(
@@ -144,6 +227,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
     return clients.filter((client) => {
       const statusMatches =
         statusFilter === 'all' || client.status === statusFilter;
+      const paymentMatches =
+        paymentFilter === 'all' || client.paymentStatus === paymentFilter;
       const searchMatches =
         !normalizedSearch ||
         [
@@ -157,9 +242,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
           .toLowerCase()
           .includes(normalizedSearch);
 
-      return statusMatches && searchMatches;
+      return statusMatches && paymentMatches && searchMatches;
+    }).sort((first, second) => {
+      const firstTime = new Date(first.updatedAt || first.createdAt).getTime();
+      const secondTime = new Date(second.updatedAt || second.createdAt).getTime();
+
+      return (Number.isNaN(secondTime) ? 0 : secondTime) -
+        (Number.isNaN(firstTime) ? 0 : firstTime);
     });
-  }, [clients, searchText, statusFilter]);
+  }, [clients, paymentFilter, searchText, statusFilter]);
 
   const selectedClientPlans = useMemo(
     () =>
@@ -169,10 +260,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
     [activeClient, planRecords],
   );
 
-  const stats = useMemo(() => {
-    const activeClients = clients.filter(
-      (client) => client.status !== 'completed',
-    ).length;
+  const dashboardSummary = useMemo(() => {
     const pendingPlans = clients.filter(
       (client) => client.status === 'planPending',
     ).length;
@@ -180,17 +268,37 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
       (client) => client.paymentStatus !== 'paid',
     ).length;
     const followUps = clients.filter(
-      (client) => client.status === 'followUpDue',
+      (client) => client.followUpDate && client.status !== 'completed',
     ).length;
 
     return [
-      { label: 'Total Clients', value: clients.length.toString() },
-      { label: 'Active Clients', value: activeClients.toString() },
-      { label: 'Plans Pending', value: pendingPlans.toString() },
-      { label: 'Payments Due', value: unpaidClients.toString() },
-      { label: 'Follow-ups', value: followUps.toString() },
+      { label: 'Visible', value: filteredClients.length.toString() },
+      { label: 'Pending plans', value: pendingPlans.toString() },
+      { label: 'Unpaid', value: unpaidClients.toString() },
+      { label: 'Follow-ups set', value: followUps.toString() },
     ];
-  }, [clients]);
+  }, [clients, filteredClients.length]);
+
+  const clientCompletion = useMemo(() => {
+    const requiredFields: Array<keyof AdminClient> = [
+      'name',
+      'age',
+      'height',
+      'weight',
+      'dietType',
+      'goal',
+      'workoutStatus',
+    ];
+    const completedFields = requiredFields.filter((field) =>
+      draftClient[field].trim(),
+    ).length;
+
+    return {
+      completedFields,
+      totalFields: requiredFields.length,
+      percentage: Math.round((completedFields / requiredFields.length) * 100),
+    };
+  }, [draftClient]);
 
   const loadAdminData = async () => {
     const [nextClients, nextPlanRecords] = await Promise.all([
@@ -333,6 +441,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
 
   const refreshData = async () => {
     try {
+      setIsRefreshing(true);
       await loadAdminData();
       setNotice({ type: 'success', message: 'Admin data refreshed.' });
     } catch (error) {
@@ -341,6 +450,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
         message:
           error instanceof Error ? error.message : 'Could not refresh data.',
       });
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -385,6 +496,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
     }
 
     try {
+      setIsSavingClient(true);
       const clientToSave = await saveAdminClientAsync(draftClient);
       await loadAdminData();
       setActiveClientId(clientToSave.id);
@@ -397,6 +509,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
         message:
           error instanceof Error ? error.message : 'Could not save client.',
       });
+    } finally {
+      setIsSavingClient(false);
     }
   };
 
@@ -422,6 +536,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
     };
 
     try {
+      setStartingPlanClientId(client.id);
       const persistedClient = await saveAdminClientAsync(savedClient);
       const plan = createDietPlanFromAdminClient(persistedClient);
       setActiveClientId(persistedClient.id);
@@ -434,6 +549,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
         message:
           error instanceof Error ? error.message : 'Could not create plan.',
       });
+    } finally {
+      setStartingPlanClientId('');
     }
   };
 
@@ -710,37 +827,46 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
   return (
     <main className="min-h-screen bg-slate-50 pt-24 text-slate-900">
       <section className="border-b border-slate-200 bg-white">
-        <div className="container mx-auto px-6 py-8">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="container mx-auto px-6 py-7">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p className="mb-3 text-sm font-semibold uppercase tracking-[0.18em] text-leaf-600">
-                Nutritionist admin
-              </p>
+              <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-slate-500">
+                <span className="rounded-full bg-leaf-50 px-3 py-1 text-leaf-700">
+                  Private Admin
+                </span>
+                <span>
+                  {isDashboardRoute
+                    ? 'Client Pipeline'
+                    : isProfileFormRoute
+                      ? 'Client Intake'
+                      : 'Client Workspace'}
+                </span>
+              </div>
               <h1 className="font-serif text-4xl font-bold text-slate-950 md:text-5xl">
                 {isCreateClientRoute
-                  ? 'Create Client Profile'
+                  ? 'Create Client'
                   : isEditClientRoute
                     ? `Edit ${activeClient?.name || 'Client'}`
                     : isClientDetailRoute
                   ? activeClient?.name || 'Client Details'
-                  : 'Client Workflow Dashboard'}
+                  : 'Clients'}
               </h1>
               <p className="mt-4 max-w-3xl text-base leading-relaxed text-slate-600">
                 {isProfileFormRoute
-                  ? 'Complete the client intake once, then save and continue to the client workspace.'
+                  ? 'Capture the intake once, save the profile, then create a diet plan from the same client record.'
                   : isClientDetailRoute
-                  ? 'Edit intake details, review every saved diet plan, open drafts, download PDFs, and clean up this client record.'
-                  : 'Manage clients, intake details, payment status, follow-ups, and saved diet plan history from one private workspace.'}
+                  ? 'Review intake details, create a new diet plan, and manage every saved PDF for this client.'
+                  : 'Find the right client fast, check status at a glance, and continue the next action from their card.'}
               </p>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-3 lg:justify-end">
               {(isClientDetailRoute || isProfileFormRoute) && (
                 <button
                   type="button"
                   onClick={() => {
                     window.location.hash = '#/admin';
                   }}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700"
+                  className={secondaryButtonClassName}
                 >
                   <ArrowLeft size={18} />
                   Dashboard
@@ -749,16 +875,21 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
               <button
                 type="button"
                 onClick={refreshData}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700"
+                disabled={isRefreshing}
+                className={secondaryButtonClassName}
               >
-                <RefreshCcw size={18} />
-                Refresh
+                {isRefreshing ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  <RefreshCcw size={18} />
+                )}
+                {isRefreshing ? 'Refreshing...' : 'Refresh'}
               </button>
               <button
                 type="button"
                 onClick={startNewClient}
                 disabled={isCreateClientRoute}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700"
+                className={primaryButtonClassName}
               >
                 <Plus size={18} />
                 New Client
@@ -766,7 +897,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
               <button
                 type="button"
                 onClick={logout}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                className={darkButtonClassName}
               >
                 <LogOut size={18} />
                 Logout
@@ -789,24 +920,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
       </section>
 
       <section className="container mx-auto px-6 py-8">
-        {isClientDetailRoute && (
-        <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {stats.map((stat) => (
-            <div
-              key={stat.label}
-              className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
-            >
-              <p className="text-sm font-semibold text-slate-500">
-                {stat.label}
-              </p>
-              <p className="mt-2 text-3xl font-bold text-slate-950">
-                {stat.value}
-              </p>
-            </div>
-          ))}
-        </div>
-        )}
-
         <div
           className={
             isProfileFormRoute
@@ -817,18 +930,32 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
           }
         >
           {isDashboardRoute && (
-          <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex items-center gap-3">
-                <UsersRound size={20} className="text-leaf-700" />
+          <section className={panelClassName}>
+            <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf-50 text-leaf-700">
+                  <UsersRound size={22} />
+                </div>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">Clients</h2>
-                  <p className="text-sm text-slate-500">
+                  <h2 className="text-xl font-bold text-slate-900">
+                    Client Cards
+                  </h2>
+                  <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
                     Select a client to open their profile, plan history, and diet plan actions.
                   </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {dashboardSummary.map((item) => (
+                      <span
+                        key={item.label}
+                        className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600"
+                      >
+                        {item.label}: {item.value}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[520px]">
+              <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[720px]">
                 <div className="relative">
                   <Search
                     size={17}
@@ -855,19 +982,31 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                     </option>
                   ))}
                 </select>
+                <select
+                  value={paymentFilter}
+                  onChange={(event) =>
+                    setPaymentFilter(event.target.value as 'all' | AdminPaymentStatus)
+                  }
+                  className={inputClassName}
+                >
+                  <option value="all">All payments</option>
+                  {ADMIN_PAYMENT_STATUSES.map((status) => (
+                    <option key={status.id} value={status.id}>
+                      {status.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {filteredClients.length ? (
                 filteredClients.map((client) => (
-                  <button
+                  <article
                     key={client.id}
-                    type="button"
-                    onClick={() => selectClient(client)}
-                    className="min-h-44 rounded-lg border border-slate-200 bg-white p-5 text-left transition hover:border-leaf-300 hover:bg-leaf-50"
+                    className="flex min-h-60 flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-leaf-300 hover:shadow-md"
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-lg font-bold text-slate-900">
                           {client.name || 'Unnamed client'}
@@ -876,18 +1015,76 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           {client.goal || 'No goal added'}
                         </p>
                       </div>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                      <span
+                        className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
+                          statusToneMap[client.status]
+                        }`}
+                      >
                         {statusLabelMap[client.status]}
                       </span>
                     </div>
-                    <div className="mt-5 space-y-2 text-sm font-semibold text-slate-500">
-                      <p>{client.phone || client.instagramHandle || 'No contact'}</p>
-                      <p>
-                        {paymentLabelMap[client.paymentStatus]} - Follow-up:{' '}
-                        {formatDate(client.followUpDate)}
-                      </p>
+
+                    <div className="mt-5 grid gap-3 text-sm">
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">
+                          Contact
+                        </p>
+                        <p className="mt-1 font-semibold text-slate-700">
+                          {client.phone ||
+                            client.instagramHandle ||
+                            client.email ||
+                            'No contact'}
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">
+                            Payment
+                          </p>
+                          <span
+                            className={`mt-1 inline-flex rounded-full px-2 py-1 text-xs font-bold ${
+                              paymentToneMap[client.paymentStatus]
+                            }`}
+                          >
+                            {paymentLabelMap[client.paymentStatus]}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">
+                            Follow-up
+                          </p>
+                          <p className="mt-1 inline-flex items-center gap-1.5 font-semibold text-slate-700">
+                            <CalendarDays size={14} className="text-leaf-700" />
+                            {formatRelativeDate(client.followUpDate)}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  </button>
+
+                    <div className="mt-auto flex flex-wrap gap-2 pt-5">
+                      <button
+                        type="button"
+                        onClick={() => selectClient(client)}
+                        className={secondaryButtonClassName}
+                      >
+                        <UserRound size={16} />
+                        Open
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startDietPlan(client)}
+                        disabled={startingPlanClientId === client.id}
+                        className={primaryButtonClassName}
+                      >
+                        {startingPlanClientId === client.id ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={16} />
+                        )}
+                        Plan
+                      </button>
+                    </div>
+                  </article>
                 ))
               ) : (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 md:col-span-2 xl:col-span-3">
@@ -900,67 +1097,89 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
 
           {isClientDetailRoute && (
           <aside className="space-y-4 xl:sticky xl:top-28 xl:self-start">
-              <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-center gap-3">
-                  <UserRound size={20} className="text-leaf-700" />
-                  <h2 className="text-lg font-bold text-slate-900">
-                    Client Summary
-                  </h2>
+              <div className={panelClassName}>
+                <div className="mb-5 flex items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf-50 text-leaf-700">
+                    <UserRound size={22} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900">
+                      Client Summary
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Intake snapshot and next best action.
+                    </p>
+                  </div>
                 </div>
                 {activeClient ? (
-                  <div className="space-y-4">
-                    <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                        Status
-                      </p>
-                      <p className="mt-2 font-bold text-slate-900">
+                  <div className="space-y-5">
+                    <div className="flex flex-wrap gap-2">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold ${
+                          statusToneMap[activeClient.status]
+                        }`}
+                      >
                         {statusLabelMap[activeClient.status]}
-                      </p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Payment: {paymentLabelMap[activeClient.paymentStatus]}
-                      </p>
+                      </span>
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold ${
+                          paymentToneMap[activeClient.paymentStatus]
+                        }`}
+                      >
+                        {paymentLabelMap[activeClient.paymentStatus]}
+                      </span>
                     </div>
+
                     <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div className="rounded-lg border border-slate-100 p-3">
+                      <div className="rounded-lg bg-slate-50 p-4">
                         <p className="font-semibold text-slate-500">Plans</p>
                         <p className="mt-1 text-2xl font-bold text-slate-950">
                           {selectedClientPlans.length}
                         </p>
                       </div>
-                      <div className="rounded-lg border border-slate-100 p-3">
+                      <div className="rounded-lg bg-slate-50 p-4">
                         <p className="font-semibold text-slate-500">
                           Follow-up
                         </p>
-                        <p className="mt-1 font-bold text-slate-950">
-                          {formatDate(activeClient.followUpDate)}
+                        <p className="mt-1 text-sm font-bold text-slate-950">
+                          {formatRelativeDate(activeClient.followUpDate)}
                         </p>
                       </div>
                     </div>
-                    <div className="space-y-2 text-sm text-slate-600">
-                      <p>
-                        <span className="font-semibold text-slate-800">
-                          Contact:
-                        </span>{' '}
-                        {activeClient.phone ||
-                          activeClient.instagramHandle ||
-                          activeClient.email ||
-                          'Not added'}
-                      </p>
-                      <p>
-                        <span className="font-semibold text-slate-800">
-                          Goal:
-                        </span>{' '}
-                        {activeClient.goal || 'Not added'}
-                      </p>
+
+                    <div className="space-y-3 rounded-lg border border-slate-100 p-4 text-sm">
+                      {[
+                        ['Contact', activeClient.phone || activeClient.instagramHandle || activeClient.email || 'Not added'],
+                        ['Goal', activeClient.goal || 'Not added'],
+                        ['Health', activeClient.healthIssues || 'Not added'],
+                        ['Diet', activeClient.dietType || 'Not added'],
+                      ].map(([label, value]) => (
+                        <div key={label} className="flex justify-between gap-4">
+                          <span className="font-semibold text-slate-500">
+                            {label}
+                          </span>
+                          <span className="text-right font-semibold text-slate-800">
+                            {value}
+                          </span>
+                        </div>
+                      ))}
                     </div>
+
                     <div className="grid gap-2">
                       <button
                         type="button"
                         onClick={() => startDietPlan(activeClient)}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                        disabled={startingPlanClientId === activeClient.id}
+                        className={primaryButtonClassName}
                       >
-                        <Sparkles size={17} />
-                        New Diet Plan
+                        {startingPlanClientId === activeClient.id ? (
+                          <Loader2 size={17} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={17} />
+                        )}
+                        {startingPlanClientId === activeClient.id
+                          ? 'Opening Planner...'
+                          : 'Create Diet Plan'}
                       </button>
                       <button
                         type="button"
@@ -969,7 +1188,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                             activeClient.id,
                           );
                         }}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700"
+                        className={secondaryButtonClassName}
                       >
                         <Pencil size={17} />
                         Edit Profile
@@ -977,7 +1196,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                       <button
                         type="button"
                         onClick={deleteClient}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 px-4 py-3 text-sm font-semibold text-red-700 transition hover:bg-red-50"
+                        className={dangerButtonClassName}
                       >
                         <Trash2 size={17} />
                         Delete Client
@@ -996,48 +1215,94 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
 
           <div className="space-y-6">
             {isProfileFormRoute && (
-            <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-leaf-50 text-leaf-700">
-                    <UserRound size={20} />
+            <section className={panelClassName}>
+              <div className="mb-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf-50 text-leaf-700">
+                    <UserRound size={22} />
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold text-slate-900">
-                      {isCreateClientRoute ? 'New Client Profile' : 'Edit Client Profile'}
+                    <h2 className="text-xl font-bold text-slate-900">
+                      {isCreateClientRoute ? 'New Client Intake' : 'Edit Client Intake'}
                     </h2>
-                    <p className="text-sm text-slate-500">
-                      Save intake details before creating or updating diet plans.
+                    <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
+                      Add the essential details first. The diet planner will reuse these fields for AI meal generation and PDF records.
                     </p>
+                    <div className="mt-4 max-w-md">
+                      <div className="mb-2 flex justify-between text-xs font-bold text-slate-500">
+                        <span>Required intake completeness</span>
+                        <span>
+                          {clientCompletion.completedFields}/{clientCompletion.totalFields}
+                        </span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full bg-leaf-600 transition-all"
+                          style={{ width: `${clientCompletion.percentage}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={copyIntakeQuestions}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700"
-                  >
-                    <Copy size={17} />
-                    Copy Intake
-                  </button>
-                  <button
-                    type="button"
-                    onClick={saveClient}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-leaf-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-leaf-700"
-                  >
-                    <Save size={17} />
-                    Save Client
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => startDietPlan(draftClient)}
-                    disabled={!draftClient.name.trim()}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    <Sparkles size={17} />
-                    Create Plan
-                  </button>
+
+                <div className="rounded-lg border border-leaf-100 bg-leaf-50 p-4">
+                  <p className="text-sm font-bold text-slate-900">
+                    Recommended flow
+                  </p>
+                  <ol className="mt-3 space-y-2 text-sm font-semibold text-slate-600">
+                    <li>1. Save client profile</li>
+                    <li>2. Create diet plan from saved client</li>
+                    <li>3. Save final PDF to plan history</li>
+                  </ol>
+                  <div className="mt-4 grid gap-2">
+                    <button
+                      type="button"
+                      onClick={saveClient}
+                      disabled={isSavingClient}
+                      className={primaryButtonClassName}
+                    >
+                      {isSavingClient ? (
+                        <Loader2 size={17} className="animate-spin" />
+                      ) : (
+                        <Save size={17} />
+                      )}
+                      {isSavingClient ? 'Saving Client...' : 'Save Client'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startDietPlan(draftClient)}
+                      disabled={!draftClient.name.trim() || Boolean(startingPlanClientId)}
+                      className={darkButtonClassName}
+                    >
+                      {startingPlanClientId ? (
+                        <Loader2 size={17} className="animate-spin" />
+                      ) : (
+                        <Sparkles size={17} />
+                      )}
+                      Create Plan
+                    </button>
+                  </div>
                 </div>
+              </div>
+
+              <div className="mb-6 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={copyIntakeQuestions}
+                  className={secondaryButtonClassName}
+                >
+                  <Copy size={17} />
+                  Copy Intake Questions
+                </button>
+              </div>
+
+              <div className="mb-5 rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
+                <p className="text-sm font-bold text-slate-800">
+                  Client profile
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Contact, body metrics, medical context, preferences, and workflow status.
+                </p>
               </div>
 
               <div className="grid gap-5 md:grid-cols-2">
@@ -1359,25 +1624,74 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                   />
                 </label>
               </div>
+
+              <div className="mt-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm font-semibold text-slate-600">
+                  Save the client before creating the final diet plan workflow.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={saveClient}
+                    disabled={isSavingClient}
+                    className={primaryButtonClassName}
+                  >
+                    {isSavingClient ? (
+                      <Loader2 size={17} className="animate-spin" />
+                    ) : (
+                      <Save size={17} />
+                    )}
+                    {isSavingClient ? 'Saving Client...' : 'Save Client'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startDietPlan(draftClient)}
+                    disabled={!draftClient.name.trim() || Boolean(startingPlanClientId)}
+                    className={darkButtonClassName}
+                  >
+                    {startingPlanClientId ? (
+                      <Loader2 size={17} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={17} />
+                    )}
+                    Create Plan
+                  </button>
+                </div>
+              </div>
             </section>
             )}
 
             {isClientDetailRoute && (
-            <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="mb-5 flex items-center justify-between gap-4">
+            <section className={panelClassName}>
+              <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex items-center gap-3">
-                  <FileText size={20} className="text-leaf-700" />
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf-50 text-leaf-700">
+                    <FileText size={22} />
+                  </div>
                   <div>
-                    <h2 className="text-lg font-bold text-slate-900">
+                    <h2 className="text-xl font-bold text-slate-900">
                       Plan History
                     </h2>
                     <p className="text-sm text-slate-500">
-                      {activeClient
-                        ? 'All saved diet plans for this client are available here.'
-                        : 'Recent saved plans from the diet plan editor appear here.'}
+                      Saved diet plans and PDFs for this client stay here.
                     </p>
                   </div>
                 </div>
+                {activeClient && (
+                  <button
+                    type="button"
+                    onClick={() => startDietPlan(activeClient)}
+                    disabled={startingPlanClientId === activeClient.id}
+                    className={primaryButtonClassName}
+                  >
+                    {startingPlanClientId === activeClient.id ? (
+                      <Loader2 size={17} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={17} />
+                    )}
+                    New Diet Plan
+                  </button>
+                )}
               </div>
 
               <div className="grid gap-3">
@@ -1385,10 +1699,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                   selectedClientPlans.map((record) => (
                     <div
                       key={record.id}
-                      className="flex flex-col gap-4 rounded-lg border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+                      className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between"
                     >
                       <div>
-                        <p className="font-bold text-slate-900">
+                        <p className="text-lg font-bold text-slate-900">
                           {record.title}
                         </p>
                         <p className="mt-1 text-sm text-slate-500">
@@ -1396,7 +1710,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           {' '}
                           {formatDate(record.updatedAt)}
                         </p>
-                        <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                        <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
                           {record.status}
                         </span>
                       </div>
@@ -1405,7 +1719,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           <button
                             type="button"
                             onClick={() => openPlanRecord(record)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700"
+                            className={secondaryButtonClassName}
                           >
                             <ClipboardList size={17} />
                             Edit Plan
@@ -1414,7 +1728,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                             type="button"
                             onClick={() => downloadStoredPdf(record)}
                             disabled={!record.pdfPath}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700 disabled:cursor-not-allowed disabled:border-slate-100 disabled:text-slate-300"
+                            className={secondaryButtonClassName}
                             title={
                               record.pdfPath
                                 ? 'Open stored customer PDF'
@@ -1427,7 +1741,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           <button
                             type="button"
                             onClick={() => deletePlanRecord(record)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 px-4 py-3 text-sm font-semibold text-red-700 transition hover:bg-red-50"
+                            className={dangerButtonClassName}
                           >
                             <Trash2 size={17} />
                             Delete
@@ -1437,7 +1751,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           <button
                             type="button"
                             onClick={() => copyPlanRecord(record)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-leaf-300 hover:text-leaf-700"
+                            className={secondaryButtonClassName}
                           >
                             <Copy size={17} />
                             Copy
@@ -1445,7 +1759,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           <button
                             type="button"
                             onClick={() => sendPlanRecordToWhatsApp(record)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-leaf-200 bg-leaf-50 px-4 py-3 text-sm font-semibold text-leaf-800 transition hover:border-leaf-300"
+                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-leaf-200 bg-leaf-50 px-4 text-sm font-semibold text-leaf-800 transition hover:border-leaf-300"
                           >
                             <Send size={17} />
                             WhatsApp
@@ -1453,7 +1767,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           <button
                             type="button"
                             onClick={() => sharePlanRecordOnInstagram(record)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-pink-200 bg-pink-50 px-4 py-3 text-sm font-semibold text-pink-700 transition hover:border-pink-300"
+                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-pink-200 bg-pink-50 px-4 text-sm font-semibold text-pink-700 transition hover:border-pink-300"
                           >
                             <Instagram size={17} />
                             Instagram
