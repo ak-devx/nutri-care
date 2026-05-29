@@ -26,6 +26,7 @@ const Header: React.FC<HeaderProps> = ({ currentPage = 'home' }) => {
     { name: 'Healthy Games', href: '#healthy-games' },
     { name: 'AI Assistant', href: '#ai-assistant' },
     { name: 'Testimonials', href: '#testimonials' },
+    { name: 'Contact', href: '#contact' },
   ];
 
   return (
