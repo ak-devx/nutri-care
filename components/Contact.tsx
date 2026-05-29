@@ -90,7 +90,7 @@ const Contact: React.FC = () => {
                 </p>
 
                 <div className="space-y-6">
-                  {/*<div className="flex items-start gap-4">
+                  <div className="flex items-start gap-4">
                     <Phone className="shrink-0 mt-1 text-leaf-200" />
                     <div>
                       <h4 className="font-semibold">Call or WhatsApp</h4>
@@ -101,7 +101,7 @@ const Contact: React.FC = () => {
                         +91 92118 91504
                       </a>
                     </div>
-                  </div>*/}
+                  </div>
                   <div className="flex items-start gap-4">
                     <Mail className="shrink-0 mt-1 text-leaf-200" />
                     <div>
