@@ -38,6 +38,7 @@ import {
   buildClientIntakeMessage,
   createAdminClient,
   createDietPlanFromAdminClient,
+  createRenewedDietPlanFromRecord,
   deleteAdminClientAsync,
   deleteAdminDietPlanRecordAsync,
   getAdminDietPlanPdfSignedUrl,
@@ -202,6 +203,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingClient, setIsSavingClient] = useState(false);
   const [startingPlanClientId, setStartingPlanClientId] = useState('');
+  const [renewingPlanId, setRenewingPlanId] = useState('');
   const [notice, setNotice] = useState<AdminNotice>(null);
 
   const routeClientId = useMemo(
@@ -560,6 +562,58 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
       JSON.stringify(record.plan),
     );
     window.location.hash = '#/diet-plan';
+  };
+
+  const renewPlanRecord = async (record: AdminDietPlanRecord) => {
+    const sourceClient =
+      activeClient || clients.find((client) => client.id === record.clientId) ||
+      null;
+    const confirmed = window.confirm(
+      `Create a new editable copy of "${record.title}"? The old plan and stored PDF will remain unchanged.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setRenewingPlanId(record.id);
+
+      if (sourceClient) {
+        const now = new Date().toISOString();
+        const nextClient = await saveAdminClientAsync({
+          ...sourceClient,
+          status: 'planPending',
+          updatedAt: now,
+        });
+        setClients((currentClients) =>
+          currentClients.map((client) =>
+            client.id === nextClient.id ? nextClient : client,
+          ),
+        );
+        setActiveClientId(nextClient.id);
+        setDraftClient(nextClient);
+        window.localStorage.setItem(
+          DIET_PLAN_STORAGE_KEY,
+          JSON.stringify(createRenewedDietPlanFromRecord(record, nextClient)),
+        );
+      } else {
+        window.localStorage.setItem(
+          DIET_PLAN_STORAGE_KEY,
+          JSON.stringify(createRenewedDietPlanFromRecord(record)),
+        );
+      }
+
+      window.location.hash = '#/diet-plan';
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Could not renew diet plan.',
+      });
+    } finally {
+      setRenewingPlanId('');
+    }
   };
 
   const deletePlanRecord = async (record: AdminDietPlanRecord) => {
@@ -1723,6 +1777,20 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                           >
                             <ClipboardList size={17} />
                             Edit Plan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => renewPlanRecord(record)}
+                            disabled={renewingPlanId === record.id}
+                            className={primaryButtonClassName}
+                            title="Create a new editable copy while keeping the old PDF unchanged"
+                          >
+                            {renewingPlanId === record.id ? (
+                              <Loader2 size={17} className="animate-spin" />
+                            ) : (
+                              <RefreshCcw size={17} />
+                            )}
+                            Renew
                           </button>
                           <button
                             type="button"

@@ -445,6 +445,70 @@ export const createDietPlanFromAdminClient = (
   };
 };
 
+const getDateInputValue = (date = new Date()): string => {
+  const offsetDate = new Date(
+    date.getTime() - date.getTimezoneOffset() * 60_000,
+  );
+
+  return offsetDate.toISOString().slice(0, 10);
+};
+
+const buildClientPatientDetails = (
+  client: AdminClient,
+  fallback: DietPlan['patient'],
+): DietPlan['patient'] => ({
+  ...fallback,
+  name: client.name || fallback.name,
+  phone: client.phone || fallback.phone,
+  instagramHandle: client.instagramHandle || fallback.instagramHandle,
+  age: client.age || fallback.age,
+  height: client.height || fallback.height,
+  weight: client.weight || fallback.weight,
+  dietType: client.dietType || fallback.dietType,
+  allergies: client.allergies || fallback.allergies,
+  healthIssues: client.healthIssues || fallback.healthIssues,
+  goal: client.goal || fallback.goal,
+  workoutStatus: client.workoutStatus || fallback.workoutStatus,
+  workoutType: client.workoutType || fallback.workoutType,
+  medicinesSupplements:
+    client.medicinesSupplements || fallback.medicinesSupplements,
+  preferences: [
+    client.preferences,
+    client.wakeSleepTime ? `Wake/sleep: ${client.wakeSleepTime}` : '',
+    client.cuisinePreference ? `Cuisine: ${client.cuisinePreference}` : '',
+    client.budgetPreference ? `Budget: ${client.budgetPreference}` : '',
+    client.currentEatingPattern
+      ? `Current eating: ${client.currentEatingPattern}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' | ') || fallback.preferences,
+});
+
+export const createRenewedDietPlanFromRecord = (
+  record: AdminDietPlanRecord,
+  client?: AdminClient | null,
+): DietPlan => {
+  const sourcePlan = normalizeDietPlan(record.plan);
+  const patient = client
+    ? buildClientPatientDetails(client, sourcePlan.patient)
+    : sourcePlan.patient;
+  const now = new Date().toISOString();
+  const patientName = patient.name.trim() || record.patientName || 'Patient';
+
+  return normalizeDietPlan({
+    ...sourcePlan,
+    id: createId('diet-plan-renewal'),
+    sourceClientId: client?.id || record.clientId || sourcePlan.sourceClientId,
+    title: `${patientName} Diet Plan - Renewal`,
+    patient: {
+      ...patient,
+      startDate: getDateInputValue(),
+    },
+    updatedAt: now,
+  });
+};
+
 export const normalizeAdminDietPlanRecord = (
   value: unknown,
 ): AdminDietPlanRecord | null => {
