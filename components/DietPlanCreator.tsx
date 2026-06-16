@@ -66,6 +66,20 @@ const labelClassName = 'mb-2 block text-sm font-semibold text-slate-700';
 
 const DIET_TYPE_OPTIONS = ['Veg', 'Eggetarian', 'Non-veg'] as const;
 const WORKOUT_STATUS_OPTIONS = ['Yes', 'No'] as const;
+const GOAL_DROPDOWN_OPTIONS = [
+  'Weight Loss Vegetarian',
+  'Weight Gain Healthy Diet',
+  'PCOS/PCOD Friendly',
+  'Thyroid Friendly',
+  'Gestational Diabetes',
+  'Anemia Friendly',
+  'Fatty Liver Friendly',
+  'Hypertension Friendly (Low Sodium)',
+  'Kidney Friendly',
+  'Prediabetes Friendly',
+  'High Cholesterol Friendly',
+  'Gut Health Friendly',
+] as const;
 
 const waitForSaveLoaderPaint = (): Promise<void> =>
   new Promise((resolve) => {
@@ -940,8 +954,14 @@ const DietPlanCreator: React.FC = () => {
                     updatePatientField('goal', event.target.value)
                   }
                   className={inputClassName}
-                  placeholder="Weight loss, diabetes support, muscle gain"
+                  list="diet-plan-goal-options"
+                  placeholder="Select a goal"
                 />
+                <datalist id="diet-plan-goal-options">
+                  {GOAL_DROPDOWN_OPTIONS.map((option) => (
+                    <option key={option} value={option} />
+                  ))}
+                </datalist>
               </label>
               <label>
                 <span className={labelClassName}>Workout</span>

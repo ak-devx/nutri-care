@@ -116,6 +116,20 @@ const paymentToneMap: Record<AdminPaymentStatus, string> = {
   partial: 'bg-amber-50 text-amber-700',
   paid: 'bg-leaf-50 text-leaf-700',
 };
+const GOAL_DROPDOWN_OPTIONS = [
+  'Weight Loss Vegetarian',
+  'Weight Gain Healthy Diet',
+  'PCOS/PCOD Friendly',
+  'Thyroid Friendly',
+  'Gestational Diabetes',
+  'Anemia Friendly',
+  'Fatty Liver Friendly',
+  'Hypertension Friendly (Low Sodium)',
+  'Kidney Friendly',
+  'Prediabetes Friendly',
+  'High Cholesterol Friendly',
+  'Gut Health Friendly',
+] as const;
 
 const formatDate = (value: string): string => {
   if (!value) {
@@ -1471,8 +1485,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ currentHash }) => {
                       updateDraftField('goal', event.target.value)
                     }
                     className={inputClassName}
-                    placeholder="Weight loss, PCOS, diabetes"
+                    list="admin-goal-options"
+                    placeholder="Select a goal"
                   />
+                  <datalist id="admin-goal-options">
+                    {GOAL_DROPDOWN_OPTIONS.map((option) => (
+                      <option key={option} value={option} />
+                    ))}
+                  </datalist>
                 </label>
                 <label>
                   <span className={labelClassName}>Workout</span>
